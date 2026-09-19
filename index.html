@@ -165,7 +165,7 @@
 /* =======================================================================
    CONFIGURACIÓN: pega aquí la URL de tu Apps Script (termina en /exec)
    ======================================================================= */
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwrN0aKBFSrdLdmKb2da0RJjj7JOW4-KFEi4mlXGY5ioRx-5IP8aCv3k1Rd39cBQsZn/exec";
+const APPS_SCRIPT_URL = "PEGA_AQUI_TU_URL_DE_APPS_SCRIPT";
 /* ======================================================================= */
 
 let AREAS = ["Esporas","Koru","Lecto","Helechos 1","Helechos 2","Oficina","General","Talleristas"];
@@ -696,7 +696,7 @@ function renderOperacionesView(){
     const cartHtml = cartEntries.length ? `
       <div class="cart">
         <h3>Artículos de esta compra (${cartEntries.reduce((s,[,q])=>s+q,0)} piezas en total)</h3>
-        ${cartEntries.map(([n,q])=>`<div class="cart-item"><span>${escapeHtml(n)} <strong>× ${q}</strong></span><button class="btn ghost small" data-quitar-compra="${escapeHtml(n)}" type="button">Quitar</button></div>`).join('')}
+        ${cartEntries.map(([n,q])=>`<div class="cart-item"><span>${escapeHtml(n)} <strong>× ${q}</strong>${!(n in inventario)?' <span style="color:var(--accent);font-weight:700;">(nuevo)</span>':''}</span><button class="btn ghost small" data-quitar-compra="${escapeHtml(n)}" type="button">Quitar</button></div>`).join('')}
       </div>` : '<p class="sub" style="margin-top:8px;">Escribe la cantidad junto a cada material que trajiste. Si es un material nuevo que no está en la lista, agrégalo abajo.</p>';
 
     const grupos = agruparCompras(entradas).sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
@@ -719,6 +719,13 @@ function renderOperacionesView(){
           <div class="stat-money">$${totalGeneral.toLocaleString('es-MX',{minimumFractionDigits:2})}</div>
         </div>
       </div>
+
+      <div class="section-title">📷 Leer factura con foto</div>
+      <p class="sub">Sube una foto de la factura y el formulario de abajo se va a llenar solo. Siempre revisa que todo esté bien antes de darle "Registrar".</p>
+      <div class="row" style="align-items:center;">
+        <input type="file" id="fotoFacturaInput" accept="image/*" capture="environment" style="flex:1;">
+      </div>
+      <div id="fotoFacturaEstado" style="margin:8px 0 0;font-size:13px;color:var(--text-muted);"></div>
 
       <div class="section-title">${compraEditandoId ? 'Editando una compra existente' : 'Registrar una compra nueva'}</div>
       ${compraEditandoId ? '<p class="sub" style="margin-top:-6px;">Corrige lo que necesites y guarda los cambios. El inventario se ajustará automáticamente.</p>' : ''}
@@ -901,6 +908,22 @@ function renderOperacionesView(){
         </div>
         <div class="error-msg" id="direccionPinConfigError" style="display:none;"></div>
       </div>
+      <div class="card" style="box-shadow:none;border-style:dashed;margin-top:14px;">
+        <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-bottom:10px;">Leer facturas con foto (Google AI Studio)</h3>
+        <p class="sub" style="margin-top:-4px;">Pega aquí tu clave gratuita de Google AI Studio para poder subir fotos de facturas en Compras/reabasto y que se lean automáticamente. Si no tienes una, pídesela a quien te ayudó a configurar esto.</p>
+        <div class="row" style="align-items:flex-end;flex-wrap:wrap;">
+          <div class="field" style="margin-bottom:0;min-width:140px;">
+            <label>Tu PIN de Operaciones</label>
+            <input type="password" id="pinActualGeminiInput" maxlength="8" placeholder="••••">
+          </div>
+          <div class="field" style="margin-bottom:0;flex:1;min-width:200px;">
+            <label>Clave de Google AI Studio</label>
+            <input type="password" id="claveGeminiInput" placeholder="AIza...">
+          </div>
+          <button class="btn" id="guardarClaveGeminiBtn" style="height:38px;">Guardar</button>
+        </div>
+        <div class="error-msg" id="geminiConfigError" style="display:none;"></div>
+      </div>
     `;
   } else {
     body = todos.length ? todos.map(p=>`
@@ -953,6 +976,28 @@ function renderAll(){
   else if(currentTab==='direccion') root.innerHTML = renderDireccionView();
   else root.innerHTML = renderOperacionesView();
   attachHandlers();
+}
+
+function comprimirImagen(file, maxDim, calidad){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onerror = ()=>reject(new Error('No se pudo leer el archivo.'));
+    reader.onload = (e)=>{
+      const img = new Image();
+      img.onerror = ()=>reject(new Error('No se pudo procesar la imagen.'));
+      img.onload = ()=>{
+        let w = img.width, h = img.height;
+        if(w > h && w > maxDim){ h = Math.round(h * maxDim / w); w = maxDim; }
+        else if(h >= w && h > maxDim){ w = Math.round(w * maxDim / h); h = maxDim; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', calidad).split(',')[1]);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function sincronizarCamposCompra(){
@@ -1291,6 +1336,24 @@ function attachHandlers(){
       }
       guardarPinDireccionBtn.disabled = false;
     };
+
+    const guardarClaveGeminiBtn = document.getElementById('guardarClaveGeminiBtn');
+    if(guardarClaveGeminiBtn) guardarClaveGeminiBtn.onclick = async ()=>{
+      const err = document.getElementById('geminiConfigError');
+      if(err) err.style.display='none';
+      const actual = document.getElementById('pinActualGeminiInput').value.trim();
+      const nuevaClave = document.getElementById('claveGeminiInput').value.trim();
+      guardarClaveGeminiBtn.disabled = true;
+      try{
+        await apiPost({ accion:'cambiarClaveGemini', pin:actual, nuevaClave, operador: opsOperador });
+        showToast('Clave de Google AI Studio guardada');
+        document.getElementById('pinActualGeminiInput').value = '';
+        document.getElementById('claveGeminiInput').value = '';
+      }catch(e){
+        if(err){ err.style.display='block'; err.textContent = 'No se pudo guardar: ' + e.message; }
+      }
+      guardarClaveGeminiBtn.disabled = false;
+    };
     const addSalonBtn = document.getElementById('addSalonBtn');
     if(addSalonBtn) addSalonBtn.onclick = async ()=>{
       const nameInput = document.getElementById('newSalonName');
@@ -1343,6 +1406,34 @@ function attachHandlers(){
       const el = document.getElementById(id);
       if(el) el.oninput = sincronizarCamposCompra;
     });
+
+    const fotoFacturaInput = document.getElementById('fotoFacturaInput');
+    if(fotoFacturaInput) fotoFacturaInput.onchange = async ()=>{
+      const file = fotoFacturaInput.files[0];
+      if(!file) return;
+      const estado = document.getElementById('fotoFacturaEstado');
+      estado.textContent = 'Leyendo la factura, un momento...';
+      fotoFacturaInput.disabled = true;
+      try{
+        const base64 = await comprimirImagen(file, 1600, 0.75);
+        const resp = await apiPost({ accion:'leerFacturaFoto', imagenBase64: base64, mimeType:'image/jpeg', pin: opsPin, operador: opsOperador });
+        const extraido = resp.facturaExtraida;
+        sincronizarCamposCompra();
+        if(extraido.proveedor) compraProveedor = extraido.proveedor;
+        if(extraido.fecha) compraFecha = extraido.fecha;
+        if(extraido.costoTotal) compraCostoTotal = extraido.costoTotal;
+        extraido.items.forEach(it=>{ carritoCompra[it.nombre] = (carritoCompra[it.nombre]||0) + it.cantidad; });
+        const nuevos = extraido.items.filter(it=>it.esNuevo).length;
+        estado.textContent = '';
+        showToast(`Factura leída: ${extraido.items.length} artículo(s)${nuevos?`, ${nuevos} nuevo(s)`:''}. Revisa y confirma abajo.`);
+        fotoFacturaInput.value = '';
+        renderAll();
+      }catch(e){
+        estado.textContent = '';
+        showToast('No se pudo leer la factura: ' + e.message);
+        fotoFacturaInput.disabled = false;
+      }
+    };
 
     document.querySelectorAll('[data-editar-compra]').forEach(b=>{
       b.onclick = ()=>{
