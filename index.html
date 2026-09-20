@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
 <title>Inventario de Papelería</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -165,7 +166,7 @@
 /* =======================================================================
    CONFIGURACIÓN: pega aquí la URL de tu Apps Script (termina en /exec)
    ======================================================================= */
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbygiAXCfc3nJjiReVMgZSEhk2ekQDxW7sSGnalnbFpoBf4XodfFjF9WhceeFaB0BejX/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw2TYNL4wuImnFIGSspDmMQIZs6BMaYsEGaEtFDXMdh8moouNG9OFR2oL8qsGt-eqL2/exec";
 /* ======================================================================= */
 
 let AREAS = ["Esporas","Koru","Lecto","Helechos 1","Helechos 2","Oficina","General","Talleristas"];
@@ -196,6 +197,8 @@ let opsSubtab = "pendientes";
 let pedidoArea = AREAS[0];
 let entregaDirectaArea = AREAS[0];
 let historialArea = AREAS[0];
+let historialPeriodoTipo = 'anio';
+let historialPeriodoValor = '';
 let carrito = {};
 let pendientesConocidos = new Set();
 
@@ -411,6 +414,13 @@ function renderHistorialView(){
       <ul>${p.items.map(i=>`<li>${escapeHtml(i.nombre)} — ${i.cantidad}</li>`).join('')}</ul>
     </div>`).join('');
 
+  const periodos = periodosDisponibles(propios);
+  const opcionesValor = historialPeriodoTipo==='mes' ? periodos.meses : periodos.anios;
+  if(!historialPeriodoValor || !opcionesValor.includes(historialPeriodoValor)) historialPeriodoValor = opcionesValor[0] || '';
+  const filtrados = filtrarPorPeriodo(propios, historialPeriodoTipo, historialPeriodoValor);
+  const resumen = resumenPorMaterial(filtrados);
+  const etiquetaPeriodo = historialPeriodoValor ? (historialPeriodoTipo==='mes' ? nombreMes(historialPeriodoValor) : historialPeriodoValor) : 'todo el historial';
+
   return `
   <div class="view">
     <div class="card">
@@ -423,6 +433,34 @@ function renderHistorialView(){
         </select>
       </div>
       ${fichas || '<div class="empty"><div class="big">Sin pedidos todavía</div>Cuando este salón pida material, aparecerá aquí.</div>'}
+    </div>
+
+    <div class="card">
+      <h2>Resumen sumado por material</h2>
+      <p class="sub">Cuánto se te ha entregado en total de cada material, en el periodo que elijas — ideal para saber cuántas libretas, lápices, etc. se usaron en el año.</p>
+      <div class="row" style="align-items:flex-end;">
+        <div class="field" style="min-width:120px;">
+          <label>Ver por</label>
+          <select id="historialPeriodoTipoSel">
+            <option value="anio" ${historialPeriodoTipo==='anio'?'selected':''}>Año</option>
+            <option value="mes" ${historialPeriodoTipo==='mes'?'selected':''}>Mes</option>
+          </select>
+        </div>
+        <div class="field" style="flex:1;min-width:160px;">
+          <label>Periodo</label>
+          <select id="historialPeriodoValorSel">
+            ${opcionesValor.length ? opcionesValor.map(v=>`<option value="${v}" ${v===historialPeriodoValor?'selected':''}>${historialPeriodoTipo==='mes'?nombreMes(v):v}</option>`).join('') : '<option value="">Sin entregas registradas</option>'}
+          </select>
+        </div>
+      </div>
+      <table>
+        <tr><th>Material</th><th style="text-align:right">Total entregado</th></tr>
+        ${resumen.map(([nombre,total])=>`<tr><td>${escapeHtml(nombre)}</td><td class="num">${total}</td></tr>`).join('') || '<tr><td colspan=2 class="empty">Sin entregas en este periodo.</td></tr>'}
+      </table>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn ghost small" id="descargarResumenHistorialBtn" ${resumen.length?'':'disabled'}>⬇ Descargar (Excel/CSV)</button>
+        <button class="btn ghost small" id="imprimirResumenHistorialBtn" ${resumen.length?'':'disabled'}>🖶 Imprimir / Vista PDF</button>
+      </div>
     </div>
   </div>`;
 }
@@ -723,7 +761,10 @@ function renderOperacionesView(){
       <div class="section-title">📷 Leer factura con foto</div>
       <p class="sub">Sube una foto de la factura y el formulario de abajo se va a llenar solo. Siempre revisa que todo esté bien antes de darle "Registrar".</p>
       <div class="row" style="align-items:center;">
-        <input type="file" id="fotoFacturaInput" accept="image/*" capture="environment" style="flex:1;">
+        <input type="file" id="fotoFacturaInputCamara" accept="image/*" capture="environment" style="display:none;">
+        <input type="file" id="fotoFacturaInputArchivo" accept="image/*" style="display:none;">
+        <button class="btn" id="tomarFotoBtn" type="button">📷 Tomar foto</button>
+        <button class="btn ghost" id="subirFotoBtn" type="button">📁 Subir desde archivo</button>
       </div>
       <div id="fotoFacturaEstado" style="margin:8px 0 0;font-size:13px;color:var(--text-muted);"></div>
 
@@ -911,6 +952,7 @@ function renderOperacionesView(){
       <div class="card" style="box-shadow:none;border-style:dashed;margin-top:14px;">
         <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-bottom:10px;">Leer facturas con foto (Google AI Studio)</h3>
         <p class="sub" style="margin-top:-4px;">Pega aquí tu clave gratuita de Google AI Studio para poder subir fotos de facturas en Compras/reabasto y que se lean automáticamente. Si no tienes una, pídesela a quien te ayudó a configurar esto.</p>
+        <p class="sub" style="margin-top:-4px;color:var(--danger);">Nota: en la capa gratuita, Google puede usar el contenido de las fotos para mejorar sus productos. El riesgo es bajo (son facturas de material, no datos de alumnos), pero es justo que lo sepas.</p>
         <div class="row" style="align-items:flex-end;flex-wrap:wrap;">
           <div class="field" style="margin-bottom:0;min-width:140px;">
             <label>Tu PIN de Operaciones</label>
@@ -1100,7 +1142,30 @@ function attachHandlers(){
 
   if(currentTab==='historial'){
     const sel = document.getElementById('historialAreaSel');
-    if(sel) sel.onchange = ()=>{ historialArea = sel.value; renderAll(); };
+    if(sel) sel.onchange = ()=>{ historialArea = sel.value; historialPeriodoValor=''; renderAll(); };
+    const tipoSel = document.getElementById('historialPeriodoTipoSel');
+    if(tipoSel) tipoSel.onchange = ()=>{ historialPeriodoTipo = tipoSel.value; historialPeriodoValor=''; renderAll(); };
+    const valorSel = document.getElementById('historialPeriodoValorSel');
+    if(valorSel) valorSel.onchange = ()=>{ historialPeriodoValor = valorSel.value; renderAll(); };
+
+    const descargarResumenBtn = document.getElementById('descargarResumenHistorialBtn');
+    if(descargarResumenBtn) descargarResumenBtn.onclick = ()=>{
+      const propios = pedidos.filter(p=>p.area===historialArea);
+      const filtrados = filtrarPorPeriodo(propios, historialPeriodoTipo, historialPeriodoValor);
+      const resumen = resumenPorMaterial(filtrados);
+      const etiqueta = historialPeriodoTipo==='mes' ? nombreMes(historialPeriodoValor) : historialPeriodoValor;
+      const filas = [['Material','Total entregado']].concat(resumen.map(([n,t])=>[n,t]));
+      descargarCSV(filas, `resumen_${historialArea.replace(/\s+/g,'_')}_${etiqueta.replace(/\s+/g,'_')}.csv`);
+    };
+    const imprimirResumenBtn = document.getElementById('imprimirResumenHistorialBtn');
+    if(imprimirResumenBtn) imprimirResumenBtn.onclick = ()=>{
+      const propios = pedidos.filter(p=>p.area===historialArea);
+      const filtrados = filtrarPorPeriodo(propios, historialPeriodoTipo, historialPeriodoValor);
+      const resumen = resumenPorMaterial(filtrados);
+      const etiqueta = historialPeriodoTipo==='mes' ? nombreMes(historialPeriodoValor) : historialPeriodoValor;
+      const filas = [['Material','Total entregado']].concat(resumen.map(([n,t])=>[n,t]));
+      abrirVentanaImpresion(`Resumen de ${historialArea} — ${etiqueta}`, tablaHtmlDeFilas(filas));
+    };
   }
 
   if(currentTab==='operaciones'){
@@ -1407,13 +1472,16 @@ function attachHandlers(){
       if(el) el.oninput = sincronizarCamposCompra;
     });
 
-    const fotoFacturaInput = document.getElementById('fotoFacturaInput');
-    if(fotoFacturaInput) fotoFacturaInput.onchange = async ()=>{
-      const file = fotoFacturaInput.files[0];
+    async function procesarFotoFactura(file, botonesADeshabilitar){
       if(!file) return;
+      const yaHayAlgoSinConfirmar = Object.values(carritoCompra).some(q=>q>0);
+      if(yaHayAlgoSinConfirmar && !compraEditandoId){
+        const continuar = confirm('Ya tienes artículos sin registrar en el formulario (de otra foto o capturados a mano).\n\nSi es una factura distinta, primero registra o cancela la actual — si sigues, esta foto se va a MEZCLAR con esos datos.\n\n¿Quieres continuar de todas formas?');
+        if(!continuar) return;
+      }
       const estado = document.getElementById('fotoFacturaEstado');
       estado.textContent = 'Leyendo la factura, un momento...';
-      fotoFacturaInput.disabled = true;
+      botonesADeshabilitar.forEach(b=>b.disabled = true);
       try{
         const base64 = await comprimirImagen(file, 1600, 0.75);
         const resp = await apiPost({ accion:'leerFacturaFoto', imagenBase64: base64, mimeType:'image/jpeg', pin: opsPin, operador: opsOperador });
@@ -1426,13 +1494,29 @@ function attachHandlers(){
         const nuevos = extraido.items.filter(it=>it.esNuevo).length;
         estado.textContent = '';
         showToast(`Factura leída: ${extraido.items.length} artículo(s)${nuevos?`, ${nuevos} nuevo(s)`:''}. Revisa y confirma abajo.`);
-        fotoFacturaInput.value = '';
         renderAll();
       }catch(e){
         estado.textContent = '';
         showToast('No se pudo leer la factura: ' + e.message);
-        fotoFacturaInput.disabled = false;
+        botonesADeshabilitar.forEach(b=>b.disabled = false);
       }
+    }
+
+    const inputCamara = document.getElementById('fotoFacturaInputCamara');
+    const inputArchivo = document.getElementById('fotoFacturaInputArchivo');
+    const tomarFotoBtn = document.getElementById('tomarFotoBtn');
+    const subirFotoBtn = document.getElementById('subirFotoBtn');
+    if(tomarFotoBtn && inputCamara) tomarFotoBtn.onclick = ()=>inputCamara.click();
+    if(subirFotoBtn && inputArchivo) subirFotoBtn.onclick = ()=>inputArchivo.click();
+    if(inputCamara) inputCamara.onchange = ()=>{
+      const file = inputCamara.files[0];
+      procesarFotoFactura(file, [tomarFotoBtn, subirFotoBtn]);
+      inputCamara.value = '';
+    };
+    if(inputArchivo) inputArchivo.onchange = ()=>{
+      const file = inputArchivo.files[0];
+      procesarFotoFactura(file, [tomarFotoBtn, subirFotoBtn]);
+      inputArchivo.value = '';
     };
 
     document.querySelectorAll('[data-editar-compra]').forEach(b=>{
@@ -1591,7 +1675,9 @@ function construirFilasCompras(grupos){
 }
 
 function csvEscape(v){
-  const s = String(v ?? '');
+  let s = String(v ?? '');
+  // Si empieza con =, +, -, @ Excel podría interpretarlo como fórmula al abrir el archivo.
+  if(/^[=+\-@]/.test(s)) s = "'" + s;
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
 }
 
@@ -1608,6 +1694,46 @@ function descargarCSV(filas, nombreArchivo){
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   showToast('Descarga lista');
+}
+
+function periodosDisponibles(pedidosArea){
+  const entregados = pedidosArea.filter(p=>p.estado==='entregado' && p.fechaEntrega);
+  const meses = new Set(), anios = new Set();
+  entregados.forEach(p=>{
+    const f = new Date(p.fechaEntrega);
+    anios.add(String(f.getFullYear()));
+    meses.add(f.getFullYear() + '-' + String(f.getMonth()+1).padStart(2,'0'));
+  });
+  return {
+    meses: Array.from(meses).sort().reverse(),
+    anios: Array.from(anios).sort().reverse()
+  };
+}
+
+function nombreMes(valorMes){
+  const [anio,mes] = valorMes.split('-');
+  const nombres = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  return nombres[parseInt(mes,10)-1] + ' ' + anio;
+}
+
+function filtrarPorPeriodo(pedidosArea, tipo, valor){
+  const entregados = pedidosArea.filter(p=>p.estado==='entregado' && p.fechaEntrega);
+  if(!valor) return entregados;
+  return entregados.filter(p=>{
+    const f = new Date(p.fechaEntrega);
+    const mesStr = f.getFullYear() + '-' + String(f.getMonth()+1).padStart(2,'0');
+    return tipo==='mes' ? mesStr===valor : String(f.getFullYear())===valor;
+  });
+}
+
+function resumenPorMaterial(pedidosFiltrados){
+  const totales = {};
+  pedidosFiltrados.forEach(p=>{
+    p.items.forEach(it=>{
+      totales[it.nombre] = (totales[it.nombre]||0) + it.cantidad;
+    });
+  });
+  return Object.entries(totales).sort((a,b)=>a[0].localeCompare(b[0],'es'));
 }
 
 function construirFilasSalon(area){
