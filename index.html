@@ -166,7 +166,7 @@
 /* =======================================================================
    CONFIGURACIÓN: pega aquí la URL de tu Apps Script (termina en /exec)
    ======================================================================= */
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFMreben_D_penp8vgVQ7ZdqspHMdR-_EK2m5NREvPZ1hb-qOvyECGGD73yB-90Xkx/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyzqVrSqSLlLrSZ_nef5OyLBpSuDAIAyFKfekIIT6OETzc5tQcU2Y1OH27TNo2Qy1DM/exec";
 /* ======================================================================= */
 
 let AREAS = ["Esporas","Koru","Lecto","Helechos 1","Helechos 2","Oficina","General","Talleristas"];
@@ -968,7 +968,12 @@ function renderOperacionesView(){
       </div>
     `;
   } else {
-    body = todos.length ? todos.map(p=>`
+    const cancelados = todos.filter(p=>p.estado==='cancelado').length;
+    body = `
+      ${cancelados ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+        <button class="btn ghost small" id="eliminarTodosCanceladosBtn">🗑 Eliminar todos los cancelados (${cancelados})</button>
+      </div>` : ''}
+      ${todos.length ? todos.map(p=>`
       <div class="ficha">
         <div class="top-row">
           <div>
@@ -982,7 +987,12 @@ function renderOperacionesView(){
         <div style="margin-top:10px;display:flex;justify-content:flex-end;">
           <button class="btn ghost small" data-cancelar="${p.id}" data-entregado="${p.estado==='entregado'?'1':'0'}">${p.estado==='entregado'?'Registrar devolución':'Cancelar pedido'}</button>
         </div>` : ''}
-      </div>`).join('') : '<div class="empty">Aún no hay pedidos registrados.</div>';
+        ${p.estado==='cancelado' ? `
+        <div style="margin-top:10px;display:flex;justify-content:flex-end;">
+          <button class="btn ghost small" data-eliminar-cancelado="${p.id}">🗑 Eliminar definitivamente</button>
+        </div>` : ''}
+      </div>`).join('') : '<div class="empty">Aún no hay pedidos registrados.</div>'}
+    `;
   }
 
   return `
@@ -1254,6 +1264,29 @@ function attachHandlers(){
         }catch(e){ showToast('No se pudo eliminar: ' + e.message); b.disabled=false; }
       };
     });
+
+    document.querySelectorAll('[data-eliminar-cancelado]').forEach(b=>{
+      b.onclick = async ()=>{
+        const id = b.dataset.eliminarCancelado;
+        if(!confirm('¿Borrar definitivamente este pedido cancelado? No queda ningún registro de él (a diferencia de anular, esto no se puede deshacer).')) return;
+        b.disabled = true;
+        try{
+          await apiPost({ accion:'eliminarPedidoCancelado', id, pin: opsPin, operador: opsOperador });
+          showToast('Pedido borrado');
+          await refrescar(true);
+        }catch(e){ showToast('No se pudo borrar: ' + e.message); b.disabled=false; }
+      };
+    });
+    const eliminarTodosCanceladosBtn = document.getElementById('eliminarTodosCanceladosBtn');
+    if(eliminarTodosCanceladosBtn) eliminarTodosCanceladosBtn.onclick = async ()=>{
+      if(!confirm('¿Borrar definitivamente TODOS los pedidos cancelados? No se puede deshacer.')) return;
+      eliminarTodosCanceladosBtn.disabled = true;
+      try{
+        await apiPost({ accion:'eliminarTodosLosCancelados', pin: opsPin, operador: opsOperador });
+        showToast('Pedidos cancelados eliminados');
+        await refrescar(true);
+      }catch(e){ showToast('No se pudo completar: ' + e.message); eliminarTodosCanceladosBtn.disabled=false; }
+    };
 
     document.querySelectorAll('[data-entregar]').forEach(b=>{
       b.onclick = async ()=>{
